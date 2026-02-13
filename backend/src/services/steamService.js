@@ -4,15 +4,27 @@ const { env } = require('../config/env');
 
 const OPENID_PROVIDER = 'https://steamcommunity.com/openid';
 
-const relyingParty = new RelyingParty(
-  `${env.baseUrl}/api/auth/steam/return`,
-  null,
-  true,
-  true,
-  []
-);
+function getSafeBaseUrl() {
+  const baseUrl = String(env.baseUrl || '').trim();
+  if (!baseUrl) {
+    throw new Error('BASE_URL não configurada para autenticação Steam.');
+  }
+
+  try {
+    return new URL(baseUrl).toString().replace(/\/$/, '');
+  } catch (_error) {
+    throw new Error('BASE_URL inválida. Defina uma URL absoluta (ex: https://api.seudominio.com).');
+  }
+}
+
+function createRelyingParty() {
+  const callbackUrl = `${getSafeBaseUrl()}/api/auth/steam/return`;
+  return new RelyingParty(callbackUrl, null, true, true, []);
+}
 
 function getSteamAuthUrl() {
+  const relyingParty = createRelyingParty();
+
   return new Promise((resolve, reject) => {
     relyingParty.authenticate(OPENID_PROVIDER, false, (error, authUrl) => {
       if (error || !authUrl) {
@@ -25,6 +37,8 @@ function getSteamAuthUrl() {
 }
 
 function verifySteamAssertion(params) {
+  const relyingParty = createRelyingParty();
+
   return new Promise((resolve, reject) => {
     relyingParty.verifyAssertion(params, (error, result) => {
       if (error || !result?.authenticated) {
@@ -46,6 +60,10 @@ function extractSteamId64FromClaimedId(claimedId) {
 }
 
 async function validateSteamId64(steamId64) {
+  if (!/^\d{17}$/.test(String(steamId64 || ''))) {
+    return false;
+  }
+
   if (!env.steamApiKey) {
     throw new Error('STEAM_API_KEY não configurada.');
   }
