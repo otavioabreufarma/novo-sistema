@@ -5,9 +5,9 @@ Backend em Express que centraliza as regras de negócio do bot.
 ## Endpoints para o bot
 Todos os endpoints abaixo exigem `Authorization: Bearer BOT_API_TOKEN` (exceto webhook):
 
-- `POST /api/user/server`
-- `POST /api/steam/link`
-- `POST /api/vip/purchase`
+- `GET /api/user/server`
+- `GET /api/steam/link`
+- `POST /vip/purchase`
 - `POST /api/vip/webhook`
 
 ## Modelo de usuário

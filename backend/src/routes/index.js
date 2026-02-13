@@ -17,6 +17,8 @@ const {
   steamLinkSchema,
   purchaseSchema,
   webhookSchema,
+  getServerSchema,
+  getSteamLinkSchema,
   saveServer,
   createSteamLink,
   createVipPurchase,
@@ -28,7 +30,15 @@ const router = express.Router();
 router.get('/health', getHealth);
 
 router.post('/user/server', requireBotBearerToken, validate(setServerSchema), saveServer);
+router.get('/user/server', requireBotBearerToken, validate(getServerSchema, 'query'), (req, _res, next) => {
+  req.body = req.query;
+  return saveServer(req, _res, next);
+});
 router.post('/steam/link', requireBotBearerToken, validate(steamLinkSchema), createSteamLink);
+router.get('/steam/link', requireBotBearerToken, validate(getSteamLinkSchema, 'query'), (req, _res, next) => {
+  req.body = req.query;
+  return createSteamLink(req, _res, next);
+});
 router.post('/vip/purchase', requireBotBearerToken, validate(purchaseSchema), createVipPurchase);
 router.post('/vip/webhook', validate(webhookSchema), paymentWebhook);
 

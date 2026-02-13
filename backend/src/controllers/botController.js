@@ -25,6 +25,15 @@ const webhookSchema = Joi.object({
   type: Joi.string().valid('vip', 'vip_plus').required()
 });
 
+const getServerSchema = Joi.object({
+  discordId: Joi.string().trim().min(3).max(64).required(),
+  server: Joi.string().valid('solo', 'duo').required()
+});
+
+const getSteamLinkSchema = Joi.object({
+  discordId: Joi.string().trim().min(3).max(64).required()
+});
+
 async function saveServer(req, res, next) {
   try {
     const { discordId, server } = req.body;
@@ -42,7 +51,14 @@ async function createSteamLink(req, res, next) {
   try {
     const { discordId } = req.body;
     await upsertUser(discordId, () => {});
-    const url = await getSteamAuthUrl();
+
+    let url;
+    try {
+      url = await getSteamAuthUrl();
+    } catch {
+      url = '/api/auth/steam';
+    }
+
     return res.status(200).json({ url });
   } catch (error) {
     return next(error);
@@ -109,6 +125,8 @@ module.exports = {
   steamLinkSchema,
   purchaseSchema,
   webhookSchema,
+  getServerSchema,
+  getSteamLinkSchema,
   saveServer,
   createSteamLink,
   createVipPurchase,

@@ -99,9 +99,11 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.isStringSelectMenu() && interaction.customId === 'select_servidor') {
       const server = interaction.values[0];
-      await api.post('/user/server', {
-        discordId: interaction.user.id,
-        server
+      await api.get('/api/user/server', {
+        params: {
+          discordId: interaction.user.id,
+          server
+        }
       });
 
       await interaction.reply({
@@ -116,7 +118,9 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.customId === 'vincular_steam') {
-      const response = await api.post('/steam/link', { discordId: interaction.user.id });
+      const response = await api.get('/api/steam/link', {
+        params: { discordId: interaction.user.id }
+      });
       await interaction.reply({
         content: `Vincule sua Steam aqui: ${response.data.url}`,
         ephemeral: true
