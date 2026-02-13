@@ -15,6 +15,7 @@ app.use(express.json({
 }));
 
 app.use('/api', router);
+app.use('/', router);
 
 app.use(notFound);
 app.use(errorHandler);
