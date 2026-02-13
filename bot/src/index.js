@@ -1,6 +1,7 @@
 require('dotenv').config();
 
-const axios = require('axios');
+const fs = require('fs/promises');
+const path = require('path');
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -8,358 +9,145 @@ const {
   Client,
   EmbedBuilder,
   GatewayIntentBits,
-  ModalBuilder,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  TextInputBuilder,
-  TextInputStyle
+  StringSelectMenuBuilder
 } = require('discord.js');
+const { api } = require('./services/api');
+
+const panelStatePath = path.resolve(process.cwd(), 'panel.json');
 
 const config = {
   token: process.env.DISCORD_TOKEN,
-  clientId: process.env.CLIENT_ID,
-  backendBaseUrl: process.env.BACKEND_BASE_URL || 'http://localhost:3000',
-  timeoutMs: Number(process.env.BACKEND_TIMEOUT_MS || 12000)
+  panelChannelId: process.env.PANEL_CHANNEL_ID
 };
 
-if (!config.token || !config.clientId) {
-  throw new Error('Defina DISCORD_TOKEN e CLIENT_ID no arquivo .env.');
+if (!config.token || !config.panelChannelId || !process.env.BACKEND_URL || !process.env.BOT_API_TOKEN) {
+  throw new Error('Defina DISCORD_TOKEN, PANEL_CHANNEL_ID, BACKEND_URL e BOT_API_TOKEN no .env.');
 }
 
-const api = axios.create({
-  baseURL: config.backendBaseUrl,
-  timeout: config.timeoutMs
-});
-
-const sessions = new Map();
-
-function getOrCreateSession(userId) {
-  if (!sessions.has(userId)) {
-    sessions.set(userId, {
-      server: null,
-      steamId64: null,
-      steamAuthUrl: null
-    });
-  }
-
-  return sessions.get(userId);
-}
-
-function buildStartEmbed(user) {
-  return new EmbedBuilder()
-    .setColor(0x2ecc71)
-    .setTitle('🛒 Painel de Compra VIP')
-    .setDescription(
-      [
-        `Olá, **${user.username}**!`,
-        '',
-        'Escolha o servidor para iniciar seu fluxo de compra:',
-        '• **Servidor SOLO**',
-        '• **Servidor DUO**'
-      ].join('\n')
-    )
-    .setFooter({ text: 'Fluxo seguro: o bot nunca processa pagamentos.' })
+function buildPanel() {
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle('Painel VIP')
+    .setDescription('Selecione seu servidor, vincule sua Steam e inicie sua compra de VIP.')
+    .setFooter({ text: 'As regras de negócio são processadas pelo backend.' })
     .setTimestamp();
-}
 
-function serverButtons() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('server:solo').setLabel('Servidor SOLO').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('server:duo').setLabel('Servidor DUO').setStyle(ButtonStyle.Secondary)
+  const serverSelect = new StringSelectMenuBuilder()
+    .setCustomId('select_servidor')
+    .setPlaceholder('Selecione o servidor')
+    .addOptions([
+      { label: 'Servidor SOLO', value: 'solo' },
+      { label: 'Servidor DUO', value: 'duo' }
+    ]);
+
+  const actions = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('vincular_steam').setLabel('Vincular Steam').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('comprar_vip').setLabel('Comprar VIP').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('comprar_vip_plus').setLabel('Comprar VIP+').setStyle(ButtonStyle.Danger)
   );
+
+  return {
+    embeds: [embed],
+    components: [new ActionRowBuilder().addComponents(serverSelect), actions]
+  };
 }
 
-function steamStepEmbed(server) {
-  return new EmbedBuilder()
-    .setColor(0x3498db)
-    .setTitle('🔗 Vinculação Steam')
-    .setDescription(
-      [
-        `Servidor selecionado: **${String(server).toUpperCase()}**`,
-        '',
-        '1) Clique em **Vincular Steam** para gerar o link OpenID.',
-        '2) Faça login na Steam no link recebido.',
-        '3) Clique em **Confirmar SteamID** e informe seu SteamID64.'
-      ].join('\n')
-    );
+async function readPanelState() {
+  try {
+    const raw = await fs.readFile(panelStatePath, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
 }
 
-function steamButtons() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('steam:start').setLabel('Vincular Steam').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId('steam:confirm').setLabel('Confirmar SteamID').setStyle(ButtonStyle.Primary)
-  );
+async function writePanelState(state) {
+  await fs.writeFile(panelStatePath, JSON.stringify(state, null, 2));
 }
 
-function buyEmbed(server, steamId64) {
-  return new EmbedBuilder()
-    .setColor(0x9b59b6)
-    .setTitle('✅ Steam vinculada com sucesso')
-    .setDescription(
-      [
-        `Servidor: **${String(server).toUpperCase()}**`,
-        `SteamID64: \`${steamId64}\``,
-        '',
-        'Agora selecione o pacote desejado:'
-      ].join('\n')
-    );
-}
-
-function buyButtons() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('buy:vip').setLabel('Comprar VIP').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('buy:vip+').setLabel('Comprar VIP+').setStyle(ButtonStyle.Danger)
-  );
-}
-
-function checkoutModal(vipType) {
-  return new ModalBuilder()
-    .setCustomId(`checkout:${vipType}`)
-    .setTitle(`Checkout ${vipType.toUpperCase()}`)
-    .addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('name').setLabel('Nome completo').setRequired(true).setStyle(TextInputStyle.Short)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('email').setLabel('E-mail').setRequired(true).setStyle(TextInputStyle.Short)
-      ),
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder().setCustomId('phone').setLabel('Telefone').setRequired(true).setStyle(TextInputStyle.Short)
-      )
-    );
-}
-
-function steamConfirmModal() {
-  return new ModalBuilder()
-    .setCustomId('steam:confirm:modal')
-    .setTitle('Confirmar SteamID64')
-    .addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('steamId64')
-          .setLabel('SteamID64 (17 dígitos)')
-          .setRequired(true)
-          .setMinLength(17)
-          .setMaxLength(17)
-          .setStyle(TextInputStyle.Short)
-      )
-    );
-}
-
-function getVipMetadata(vipType) {
-  if (vipType === 'vip') {
-    return { amount: 49.9, description: 'VIP - 30 dias' };
+async function restoreOrCreatePanel(client) {
+  const channel = await client.channels.fetch(config.panelChannelId);
+  if (!channel?.isTextBased()) {
+    throw new Error('PANEL_CHANNEL_ID não pertence a um canal de texto.');
   }
 
-  return { amount: 89.9, description: 'VIP+ - 30 dias' };
-}
+  const panel = buildPanel();
+  const state = await readPanelState();
 
-async function registerSlashCommand() {
-  const command = new SlashCommandBuilder()
-    .setName('loja')
-    .setDescription('Abrir a interface visual de compra de VIP');
-
-  const rest = new REST({ version: '10' }).setToken(config.token);
-  await rest.put(Routes.applicationCommands(config.clientId), { body: [command.toJSON()] });
-}
-
-function extractCheckoutUrl(checkoutPayload) {
-  if (!checkoutPayload || typeof checkoutPayload !== 'object') {
-    return null;
+  if (state.messageId) {
+    try {
+      const message = await channel.messages.fetch(state.messageId);
+      await message.edit(panel);
+      return;
+    } catch {
+      // mensagem antiga apagada: cria nova abaixo
+    }
   }
 
-  return (
-    checkoutPayload.url ||
-    checkoutPayload.checkoutUrl ||
-    checkoutPayload.checkout_url ||
-    checkoutPayload.paymentUrl ||
-    checkoutPayload.payment_url ||
-    null
-  );
+  const message = await channel.send(panel);
+  await writePanelState({ messageId: message.id, channelId: channel.id });
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 client.once('ready', async () => {
-  await registerSlashCommand();
+  await restoreOrCreatePanel(client);
   console.log(`Bot online como ${client.user.tag}`);
 });
 
 client.on('interactionCreate', async (interaction) => {
   try {
-    if (interaction.isChatInputCommand() && interaction.commandName === 'loja') {
-      const session = getOrCreateSession(interaction.user.id);
-      session.server = null;
-      session.steamId64 = null;
-      session.steamAuthUrl = null;
+    if (interaction.isStringSelectMenu() && interaction.customId === 'select_servidor') {
+      const server = interaction.values[0];
+      await api.post('/user/server', {
+        discordId: interaction.user.id,
+        server
+      });
 
       await interaction.reply({
-        embeds: [buildStartEmbed(interaction.user)],
-        components: [serverButtons()],
+        content: `Servidor **${server.toUpperCase()}** salvo com sucesso.`,
         ephemeral: true
       });
       return;
     }
 
-    if (interaction.isButton()) {
-      const session = getOrCreateSession(interaction.user.id);
-
-      if (interaction.customId.startsWith('server:')) {
-        session.server = interaction.customId.split(':')[1];
-        session.steamId64 = null;
-
-        await interaction.update({
-          embeds: [steamStepEmbed(session.server)],
-          components: [steamButtons()]
-        });
-        return;
-      }
-
-      if (interaction.customId === 'steam:start') {
-        if (!session.server) {
-          await interaction.reply({ content: 'Selecione o servidor antes de vincular a Steam.', ephemeral: true });
-          return;
-        }
-
-        const response = await api.get('/api/auth/steam');
-        session.steamAuthUrl = response.data.authUrl;
-
-        const embed = new EmbedBuilder()
-          .setColor(0xf1c40f)
-          .setTitle('🌐 Link de autenticação Steam gerado')
-          .setDescription('Clique no botão abaixo para autenticar sua conta Steam via OpenID.')
-          .setFooter({ text: 'Após login, volte e confirme o SteamID64.' });
-
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setLabel('Autenticar na Steam').setStyle(ButtonStyle.Link).setURL(session.steamAuthUrl)
-        );
-
-        await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
-        return;
-      }
-
-      if (interaction.customId === 'steam:confirm') {
-        if (!session.server) {
-          await interaction.reply({ content: 'Selecione o servidor primeiro.', ephemeral: true });
-          return;
-        }
-
-        await interaction.showModal(steamConfirmModal());
-        return;
-      }
-
-      if (interaction.customId.startsWith('buy:')) {
-        if (!session.server || !session.steamId64) {
-          await interaction.reply({
-            content: 'Você precisa vincular a Steam antes de criar checkout.',
-            ephemeral: true
-          });
-          return;
-        }
-
-        const vipType = interaction.customId.split(':')[1];
-        await interaction.showModal(checkoutModal(vipType));
-      }
-
+    if (!interaction.isButton()) {
       return;
     }
 
-    if (interaction.isModalSubmit()) {
-      const session = getOrCreateSession(interaction.user.id);
+    if (interaction.customId === 'vincular_steam') {
+      const response = await api.post('/steam/link', { discordId: interaction.user.id });
+      await interaction.reply({
+        content: `Vincule sua Steam aqui: ${response.data.url}`,
+        ephemeral: true
+      });
+      return;
+    }
 
-      if (interaction.customId === 'steam:confirm:modal') {
-        const steamId64 = interaction.fields.getTextInputValue('steamId64').trim();
+    if (interaction.customId === 'comprar_vip' || interaction.customId === 'comprar_vip_plus') {
+      const type = interaction.customId === 'comprar_vip' ? 'vip' : 'vip_plus';
+      const response = await api.post('/vip/purchase', {
+        discordId: interaction.user.id,
+        type
+      });
 
-        if (!/^\d{17}$/.test(steamId64)) {
-          await interaction.reply({
-            content: 'SteamID64 inválido. Informe exatamente 17 dígitos numéricos.',
-            ephemeral: true
-          });
-          return;
-        }
-
-        await api.post('/api/auth/link-discord-steam', {
-          server: session.server,
-          discordId: interaction.user.id,
-          steamId64
-        });
-
-        session.steamId64 = steamId64;
-
-        await interaction.reply({
-          embeds: [buyEmbed(session.server, steamId64)],
-          components: [buyButtons()],
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (interaction.customId.startsWith('checkout:')) {
-        const vipType = interaction.customId.split(':')[1];
-        const customer = {
-          name: interaction.fields.getTextInputValue('name').trim(),
-          email: interaction.fields.getTextInputValue('email').trim(),
-          phone: interaction.fields.getTextInputValue('phone').trim()
-        };
-
-        const { amount, description } = getVipMetadata(vipType);
-
-        const checkoutResponse = await api.post('/api/checkout', {
-          server: session.server,
-          steamId64: session.steamId64,
-          discordId: interaction.user.id,
-          vipType,
-          customer,
-          amount,
-          description
-        });
-
-        const checkoutUrl = extractCheckoutUrl(checkoutResponse.data.checkout);
-        if (!checkoutUrl) {
-          await interaction.reply({
-            content: 'Checkout criado, mas não recebi URL de pagamento do backend.',
-            ephemeral: true
-          });
-          return;
-        }
-
-        const embed = new EmbedBuilder()
-          .setColor(0x1abc9c)
-          .setTitle(`💳 Checkout ${vipType.toUpperCase()} criado`) 
-          .setDescription(
-            [
-              `Pedido: \`${checkoutResponse.data.orderNsu}\``,
-              `Servidor: **${String(session.server).toUpperCase()}**`,
-              `SteamID64: \`${session.steamId64}\``,
-              '',
-              'Use o botão abaixo para concluir o pagamento na InfinitePay.'
-            ].join('\n')
-          )
-          .setFooter({ text: 'Pagamento processado exclusivamente pela InfinitePay.' });
-
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setLabel('Pagar agora').setStyle(ButtonStyle.Link).setURL(checkoutUrl)
-        );
-
-        await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
-      }
+      await interaction.reply({
+        content: `Pagamento ${type.toUpperCase()} criado: ${response.data.paymentUrl}`,
+        ephemeral: true
+      });
     }
   } catch (error) {
-    const message = error?.response?.data?.error || error.message || 'Erro inesperado.';
+    const message =
+      error?.response?.data?.message ||
+      error?.response?.data?.error ||
+      'Não foi possível concluir sua solicitação agora. Tente novamente em instantes.';
 
     if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({
-        content: `❌ Não foi possível concluir a ação: ${message}`,
-        ephemeral: true
-      });
+      await interaction.followUp({ content: `❌ ${message}`, ephemeral: true });
       return;
     }
 
-    await interaction.reply({
-      content: `❌ Não foi possível concluir a ação: ${message}`,
-      ephemeral: true
-    });
+    await interaction.reply({ content: `❌ ${message}`, ephemeral: true });
   }
 });
 
