@@ -13,6 +13,20 @@ const steamLinkSchema = Joi.object({
   steamId64: Joi.string().pattern(/^\d{17}$/).required()
 });
 
+function getQueryValue(query, key) {
+  const value = query?.[key];
+
+  if (Array.isArray(value)) {
+    return String(value[0] || '').trim();
+  }
+
+  if (value === undefined || value === null) {
+    return '';
+  }
+
+  return String(value).trim();
+}
+
 async function startSteamAuth(req, res, next) {
   try {
     const authUrl = await getSteamAuthUrl();
@@ -24,7 +38,34 @@ async function startSteamAuth(req, res, next) {
 
 async function steamReturn(req, res, next) {
   try {
-    const claimedId = await verifySteamAssertion(req.query);
+    const headers = req.headers || {};
+    const callbackContext = {
+      forwardedProto: String(headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim(),
+      forwardedHost: String(headers['x-forwarded-host'] || headers.host || '').split(',')[0].trim()
+    };
+
+    if (!callbackContext.forwardedHost) {
+      callbackContext.forwardedHost = 'localhost';
+    }
+
+    const openIdParams = {
+      'openid.ns': getQueryValue(req.query, 'openid.ns'),
+      'openid.mode': getQueryValue(req.query, 'openid.mode'),
+      'openid.op_endpoint': getQueryValue(req.query, 'openid.op_endpoint'),
+      'openid.claimed_id': getQueryValue(req.query, 'openid.claimed_id'),
+      'openid.identity': getQueryValue(req.query, 'openid.identity'),
+      'openid.return_to': getQueryValue(req.query, 'openid.return_to'),
+      'openid.response_nonce': getQueryValue(req.query, 'openid.response_nonce'),
+      'openid.assoc_handle': getQueryValue(req.query, 'openid.assoc_handle'),
+      'openid.signed': getQueryValue(req.query, 'openid.signed'),
+      'openid.sig': getQueryValue(req.query, 'openid.sig')
+    };
+
+    if (!openIdParams['openid.mode']) {
+      return res.status(400).json({ error: 'Parâmetros OpenID ausentes no callback da Steam.' });
+    }
+
+    const claimedId = await verifySteamAssertion(openIdParams);
     const steamId64 = extractSteamId64FromClaimedId(claimedId);
     const isValid = await validateSteamId64(steamId64);
 

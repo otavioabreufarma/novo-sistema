@@ -13,3 +13,8 @@ test('createOrderNsu gera prefixo por servidor', () => {
   const value = createOrderNsu('solo');
   assert.match(value, /^SOLO-\d{13}-[a-f0-9]{8}$/);
 });
+
+test('createOrderNsu usa fallback seguro quando serverName ausente', () => {
+  const value = createOrderNsu(undefined);
+  assert.match(value, /^UNKNOWN-\d{13}-[a-f0-9]{8}$/);
+});
